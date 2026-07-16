@@ -76,6 +76,13 @@ Numbers from the live channel (as of 2026-07-16):
   mature. The double-count guard on the series cap was found by the demo script
   in this repo, then pinned by a test.
 
+- **Channel glue belongs in a hook, not a fork.** The original pipeline stamps three
+  wiki files, archives the review copy and feeds a learning ledger after every
+  schedule. None of that belongs in a generic tool — but all of it fits one
+  extension point. That observation became the `on_scheduled` hook: the channel's
+  entire vault integration can run as a ~20-line hook script consuming the JSON
+  payload, instead of maintaining a diverging fork of the scheduler.
+
 ## Next iteration
 
 - Feed per-platform totals into the planner as platforms diverge (the config

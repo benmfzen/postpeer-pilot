@@ -70,6 +70,15 @@ than guessing.
 **Scheduling only, never live.** A badly timed scheduled post can be deleted; a live
 post cannot. Going live is deliberately not exposed — reversibility first.
 
+**Extensible where workflows differ, opinionated where they don't.** Every operator
+has their own tracking (a wiki to stamp, a review folder to archive, a content
+database to update). That glue stays out of the core: set `on_scheduled` in the
+config to any command and it runs after each successful schedule with the result as
+JSON on stdin (`{video, slot, post_id, series, caption, media_url}`). Hook failures
+are surfaced in the result but never undo the schedule. Security note: the hook is
+an arbitrary command sourced from your config file — keep `config.json` writable
+only by you.
+
 ## Tested invariants
 
 `tests/test_invariants.py` (plain pytest, fake API, zero network) pins the promises

@@ -8,10 +8,12 @@ YouTube title (optional): <video>.title.txt or the `title` argument.
 Scheduling only — going live immediately is deliberately NOT offered here; a wrongly
 timed scheduled post can be deleted, a live post cannot.
 """
+import json
+import subprocess
 from datetime import date
 from pathlib import Path
 
-from . import api, plan
+from . import api, config, plan
 
 
 def _caption(video: Path, caption: str | None) -> str:
@@ -28,6 +30,22 @@ def _title(video: Path, title: str | None) -> str | None:
         return title
     sidecar = video.with_suffix(".title.txt")
     return sidecar.read_text().strip() if sidecar.exists() else None
+
+
+def _fire_hook(payload: dict) -> dict | None:
+    """Run the operator's on_scheduled hook (config) with the schedule result as JSON
+    on stdin. Fire-and-report: a failing hook is surfaced in the result but NEVER
+    undoes or fails the schedule itself — the post is already placed."""
+    cmd = config.load().get("on_scheduled", "")
+    if not cmd:
+        return None
+    try:
+        p = subprocess.run(cmd, shell=True, input=json.dumps(payload, ensure_ascii=False),
+                           capture_output=True, text=True, timeout=120)
+        return {"ok": p.returncode == 0,
+                **({"stderr": p.stderr[-300:]} if p.returncode != 0 else {})}
+    except Exception as e:
+        return {"ok": False, "stderr": f"{type(e).__name__}: {e}"}
 
 
 def _already_scheduled(video: Path) -> str | None:
@@ -76,11 +94,16 @@ def schedule(videos: list, captions: list | None = None, titles: list | None = N
                             "orphaned_upload": url, "error": f"{type(e).__name__}: {e}"})
             continue
         ok = bool(r.get("id") or r.get("success") or r.get("postId"))
+        result = {"ok": ok, "video": video.name, "slot": slot, "response": r}
         if ok:
-            plan.record(slot, video.name, series,
-                        str(r.get("postId") or r.get("id") or ""), caption=cap)
+            pid = str(r.get("postId") or r.get("id") or "")
+            plan.record(slot, video.name, series, pid, caption=cap)
+            hook = _fire_hook({"video": str(video), "slot": slot, "post_id": pid,
+                               "series": series, "caption": cap, "media_url": url})
+            if hook is not None:
+                result["hook"] = hook
         else:
             taken.pop(slot, None)          # post failed -> slot is still free
-            r = {**r, "orphaned_upload": url}
-        results.append({"ok": ok, "video": video.name, "slot": slot, "response": r})
+            result["response"] = {**r, "orphaned_upload": url}
+        results.append(result)
     return results

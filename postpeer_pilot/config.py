@@ -39,6 +39,12 @@ DEFAULTS = {
     # performance sources
     "tiktok_handle": "",          # enables the yt-dlp puller when set
     "meta": {},                   # {"env": "~/.config/meta/.env", "ig_user_id": "...", "fb_page_id": "..."}
+    # post-schedule hook: shell command run after EVERY successful schedule, with the
+    # result as JSON on stdin ({video, slot, post_id, series, caption, media_url}).
+    # Wire your own tracking/archiving here. SECURITY: this executes an arbitrary
+    # command from the config file — it is an operator decision, keep config.json
+    # writable only by you. Empty = disabled. Hook failures never undo the schedule.
+    "on_scheduled": "",
 }
 
 
