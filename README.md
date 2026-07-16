@@ -1,17 +1,25 @@
 # postpeer-pilot
 
-An MCP server that turns a [Postpeer](https://postpeer.dev) account into a
-**performance-driven publishing autopilot** for short-form video (TikTok,
-Instagram, Facebook, YouTube).
+**A reliable tool layer that gives an AI agent bounded, reversible control over a
+real multi-platform publishing workflow** — built as an MCP server on top of the
+[Postpeer](https://postpeer.dev) API (TikTok, Instagram, Facebook, YouTube).
 
-You drop a video into the pipeline — it lands on the next free slot of a post
-plan that is derived from your channel's real performance and only changes when
-the data says so **consistently**.
+You drop a video into the pipeline — it lands on the next free slot of a post plan
+that is derived from your channel's real performance and only changes when the data
+says so **consistently**. The AI decides *that* something should happen; deterministic,
+auditable code decides *what the data says* (see
+[ADR-001](docs/adr/001-deterministic-planner.md) for why).
 
-```
-video.mp4 ──► schedule_video ──► next free plan slot ──► Postpeer ──► 4 platforms
-                                      ▲
-             plan.json  ◄── plan_review (damped) ◄── performance_pull
+```mermaid
+flowchart LR
+    A[Claude / MCP client] -->|schedule_video| S[scheduler]
+    A -->|plan_review| P[planner]
+    A -->|performance_pull| F[perf store]
+    S -->|next free slot| PL[plan.json]
+    S -->|upload + schedule| PP[Postpeer API]
+    PP -->|occupancy, published| P
+    F -->|views: tiktok / meta / manual| P
+    P -->|damped: two disjoint windows must agree| PL
 ```
 
 ## The four tools
@@ -21,40 +29,90 @@ video.mp4 ──► schedule_video ──► next free plan slot ──► Postp
 | `queue_status` | Scheduled posts per day, the next free plan slots, the active plan |
 | `schedule_video` | Upload + schedule video(s) onto the next free plan slot(s) |
 | `performance_pull` | Refresh view counts (TikTok via yt-dlp, IG/FB via Meta Graph API, or a manual CSV/JSONL drop) |
-| `plan_review` | Re-rank the plan against real 4/8-week performance; apply only on a stable delta |
+| `plan_review` | Re-rank the plan against two disjoint performance windows; apply only on a stable delta |
 
 ## The ideas worth stealing
 
 **A post plan, not a queue.** The plan says *how many* posts go out on *which
-weekday* at *which local times* (e.g. Mon–Wed 4, Thu 3, Fri/Sat 2 — mornings
-only). Scheduling means: find the next slot the plan allows that isn't already
-taken on Postpeer. Strong days get volume, dead days don't burn good content.
+weekday* at *which local times* (e.g. Mon–Wed 4, Thu 3, Fri/Sat 2 — mornings only).
+Scheduling means: find the next slot the plan allows that isn't already taken on
+Postpeer. Strong days get volume, dead days don't burn good content.
 
-**Damped plan adaptation.** One viral Sunday must not rewrite the plan. A
-change is only applyable when:
+**Damped plan adaptation.** One viral Sunday must not rewrite the plan. A change is
+only applyable when:
 
-- a long window (default 8 weeks) and a short window (default 4 weeks)
-  **independently produce the same new plan**,
-- every weekday has enough samples (default ≥ 3 posts),
-- there is actually more history than the short window (otherwise the
-  stability check is vacuous),
-- posts younger than 7 days are ignored (their views are still growing).
+- two **disjoint** windows — the recent weeks and the weeks before them — 
+  **independently produce the same new plan** (a channel younger than the long
+  window is simply not applyable yet),
+- every weekday has enough samples in each window (default ≥ 3 posts),
+- posts younger than 7 days are ignored (their views are still growing),
+- the metric is the **median**, so a single outlier cannot drag a weekday up.
 
 The weekly volume and its shape are preserved: a `[4,4,4,3,3,2,2]` plan stays a
-`[4,4,4,3,3,2,2]` plan — the counts just get re-assigned to weekdays by
-performance rank. `plan_review` without `apply` is always a safe, read-only
-report.
+`[4,4,4,3,3,2,2]` plan — the counts just get re-assigned to weekdays by performance
+rank. `plan_review` without `apply` is always a safe, read-only report. This is a
+deliberately **conservative heuristic, not a statistical proof** — the backtest
+below measures what that conservatism costs and buys.
 
-**Series cap.** Posts tagged with the same `series` are capped per day
-(default 2), so a 25-part series doesn't flood a single week.
+**IDs beat fuzzy matching.** Everything this tool schedules is recorded in a local
+ledger with its Postpeer post id and canonical caption. Performance reconciliation
+uses stable ids first; caption-token matching is only the fallback for pre-tool
+posts, matches exact-text before fuzzy, and **refuses ambiguous matches** rather
+than guessing.
 
-**Scheduling only, never live.** A badly timed scheduled post can be deleted;
-a live post cannot. Going live is deliberately not exposed.
+**Scheduling only, never live.** A badly timed scheduled post can be deleted; a live
+post cannot. Going live is deliberately not exposed — reversibility first.
+
+## Tested invariants
+
+`tests/test_invariants.py` (plain pytest, fake API, zero network) pins the promises
+this README makes. If code drifts, the build breaks:
+
+```text
+I1  no tool can publish immediately (scheduling only)
+I2  a dry run causes zero write side effects
+I3  plan_review never changes the weekly volume or its shape
+I4  no plan is ever written without sufficient data (young channels: not applyable)
+I5  a failed post creation does not occupy its slot
+I6  a series never exceeds its per-day cap
+I7  a second scheduler run cannot double-book a slot taken by the first
+I8  ambiguous performance matches are refused, not guessed
+```
+
+```bash
+python3 -m pytest tests/
+```
+
+## Backtesting the planner
+
+The harness replays history week by week — each decision sees only the data that
+existed at that point — and scores every strategy against the realized performance
+of the following weeks:
+
+```bash
+python3 -m postpeer_pilot.backtest            # your real history
+python3 -m postpeer_pilot.backtest --demo     # deterministic synthetic channel
+python3 -m postpeer_pilot.backtest --input posts.jsonl   # {when, views} per line
+```
+
+Metrics: `plan_churn` (changes per week), `false_adaptation_rate` (changes reverted
+within 4 weeks), `match_rate` (posts with usable view data), and captured-views
+scores for `adaptive` vs `unchanged` vs `short_only` (undamped) vs `random_expected`.
+
+The `--demo` channel shifts its strong days to the weekend halfway through. Honest
+result: the damped planner makes **exactly one** change (churn 0.056, zero false
+adaptations, +2.2% over never adapting) — while the undamped baseline adapts faster
+on this *clean* shift (+5.8%) because there is no noise to punish it. Damping trades
+adaptation speed for stability; its value grows with noise, and the harness makes
+that trade measurable instead of assumed. Caveat, by design: replay uses final view
+counts (historical early-window snapshots don't exist), which biases all strategies
+equally.
 
 ## Setup
 
-Requires Python 3.11+ (stdlib only). Optional: `yt-dlp` on the PATH for the
-TikTok puller.
+Requires Python 3.11+ (stdlib only; HTTP goes through the `curl` binary — python.org
+installs often lack SSL roots, and curl streams large uploads). Optional: `yt-dlp`
+on the PATH for the TikTok puller. `pytest` only for the test suite.
 
 ```bash
 mkdir -p ~/.config/postpeer-pilot
@@ -64,8 +122,8 @@ echo 'POSTPEER_API_KEY=pk_...'   > ~/.config/postpeer-pilot/.env
 chmod 600 ~/.config/postpeer-pilot/.env
 ```
 
-Account IDs come from `GET /v1/connect/integrations` after connecting your
-channels in Postpeer.
+Account IDs come from `GET /v1/connect/integrations` after connecting your channels
+in Postpeer.
 
 Register with Claude Code:
 
@@ -74,41 +132,41 @@ claude mcp add --scope user postpeer-pilot -- python3 /path/to/postpeer-pilot/se
 ```
 
 Then, in any session: *"schedule these three videos"* → Claude calls
-`schedule_video` with the file paths; captions come from `<video>.txt` sidecar
-files next to the mp4s.
+`schedule_video` with the file paths; captions come from `<video>.txt` sidecar files
+next to the mp4s.
 
 ## Postpeer API quirks (captured in `api.py` so you don't relearn them)
 
 - Auth header is `x-access-key`, **not** `Authorization: Bearer`.
 - `scheduledFor` must be RFC3339 with milliseconds + `Z`; combined with the
   `timezone` field, the HH:MM inside the string is treated as local time.
-- `GET /posts` hard-caps `limit` at 100 — and `limit=101` returns
-  `success:false` with an **empty list**, not an error. Always paginate with
-  `offset`.
-- YouTube titles go in `platformSpecificData: {"title": ...}` and the object
-  rejects any additional property.
+- `GET /posts` hard-caps `limit` at 100 — and `limit=101` returns `success:false`
+  with an **empty list**, not an error. Always paginate with `offset`.
+- YouTube titles go in `platformSpecificData: {"title": ...}` and the object rejects
+  any additional property.
 
-## Files
+## Design notes & known limits
 
-```
-server.py                 MCP server (stdio, newline-delimited JSON-RPC, no SDK)
-postpeer_pilot/
-  api.py                  Postpeer client (upload, posts, pagination)
-  plan.py                 plan model + free-slot search + series cap
-  planner.py              damped 4/8-week plan review
-  perf.py                 performance store + pullers (tiktok / meta / manual)
-  scheduler.py            video -> next free slot -> Postpeer
-  config.py               config dir, defaults, key/account loading
-~/.config/postpeer-pilot/
-  config.json  accounts.json  .env  plan.json  performance.jsonl  scheduled.jsonl
-```
+- **Hand-rolled MCP, no SDK.** For a small local stdio server, the minimal
+  newline-delimited JSON-RPC implementation keeps install weight at zero and shows
+  the protocol plainly. For a long-lived, multi-team service I would use the
+  official MCP SDK — protocol evolution, cancellation and capability negotiation are
+  not things to maintain by hand at scale.
+- **Concurrent schedulers** re-read live occupancy per run (tested, I7), but two
+  *simultaneous* runs still race between read and write — Postpeer offers no
+  reservation primitive. Acceptable for a single-operator tool; a shared deployment
+  would need a lock around slot assignment.
+- **Failed post after successful upload** leaves the uploaded media behind; the
+  result surfaces `orphaned_upload` with the reusable URL instead of hiding it.
+- **`plan.json` writes are not atomic** (single-operator assumption; a torn read
+  falls back to config defaults rather than crashing).
 
 ## Non-goals
 
-No content generation, no analytics dashboard, no live posting. This is the
-thin, reliable layer between "video is ready" and "video is scheduled right".
+No content generation, no analytics dashboard, no live posting. This is the thin,
+reliable layer between "video is ready" and "video is scheduled right".
 
 ---
 
-*Not affiliated with Postpeer. Built for a real channel's daily pipeline;
-extracted and generalized. MIT.*
+*Not affiliated with Postpeer. Built for a real channel's daily pipeline; extracted
+and generalized. MIT.*

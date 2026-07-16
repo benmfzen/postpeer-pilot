@@ -1,7 +1,20 @@
 {
   "timezone": "Europe/Berlin",
-  "per_day_by_wd": {"0": 4, "1": 4, "2": 4, "3": 3, "4": 2, "5": 2, "6": 3},
-  "slot_hours": ["08:00", "09:00", "10:00", "11:00"],
+  "per_day_by_wd": {
+    "0": 4,
+    "1": 4,
+    "2": 4,
+    "3": 3,
+    "4": 2,
+    "5": 2,
+    "6": 3
+  },
+  "slot_hours": [
+    "08:00",
+    "09:00",
+    "10:00",
+    "11:00"
+  ],
   "series_day_cap": 2,
   "window_weeks_long": 8,
   "window_weeks_short": 4,
@@ -12,5 +25,6 @@
     "env": "~/.config/meta/.env",
     "ig_user_id": "1784...",
     "fb_page_id": "1140..."
-  }
+  },
+  "planner_sources": []
 }

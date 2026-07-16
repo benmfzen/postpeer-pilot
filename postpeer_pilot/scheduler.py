@@ -49,11 +49,22 @@ def schedule(videos: list, captions: list | None = None, titles: list | None = N
             results.append({"ok": True, "dry_run": True, "video": video.name, "slot": slot})
             continue
         url = api.upload_media(video)
-        r = api.create_post(cap, url, slot, yt_title=_title(video, titles[i] if titles else None))
+        try:
+            r = api.create_post(cap, url, slot,
+                                yt_title=_title(video, titles[i] if titles else None))
+        except Exception as e:
+            # Upload succeeded but the post didn't: surface the orphaned media URL so it
+            # can be reused (pass it to a retry) instead of silently rotting in storage.
+            taken.pop(slot, None)
+            results.append({"ok": False, "video": video.name, "slot": slot,
+                            "orphaned_upload": url, "error": f"{type(e).__name__}: {e}"})
+            continue
         ok = bool(r.get("id") or r.get("success") or r.get("postId"))
         if ok:
-            plan.record(slot, video.name, series, str(r.get("postId") or r.get("id") or ""))
+            plan.record(slot, video.name, series,
+                        str(r.get("postId") or r.get("id") or ""), caption=cap)
         else:
             taken.pop(slot, None)          # post failed -> slot is still free
+            r = {**r, "orphaned_upload": url}
         results.append({"ok": ok, "video": video.name, "slot": slot, "response": r})
     return results

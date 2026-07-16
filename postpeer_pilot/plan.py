@@ -57,11 +57,29 @@ def _series_by_day() -> dict:
     return out
 
 
-def record(when: str, video: str, series: str | None, post_id: str = ""):
+def record(when: str, video: str, series: str | None, post_id: str = "",
+           caption: str = ""):
     LEDGER.parent.mkdir(parents=True, exist_ok=True)
     with LEDGER.open("a") as f:
         f.write(json.dumps({"when": when, "video": video, "series": series,
-                            "post_id": post_id}) + "\n")
+                            "post_id": post_id, "caption": caption},
+                           ensure_ascii=False) + "\n")
+
+
+def ledger_by_post_id() -> dict:
+    """{post_id: entry} for everything this tool scheduled — the stable-ID side of
+    performance matching: a published post whose id is in here needs no fuzzy text
+    match to know its canonical caption."""
+    out = {}
+    if LEDGER.exists():
+        for ln in LEDGER.read_text().splitlines():
+            try:
+                r = json.loads(ln)
+                if r.get("post_id"):
+                    out[r["post_id"]] = r
+            except json.JSONDecodeError:
+                pass
+    return out
 
 
 def free_slots(count: int = 1, start: date | None = None, series: str | None = None,

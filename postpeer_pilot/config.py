@@ -26,11 +26,16 @@ DEFAULTS = {
     "slot_hours": ["09:00", "11:00", "13:00", "15:00"],
     # max posts of the same `series` per day (0 = no cap)
     "series_day_cap": 2,
-    # planner damping: only change the plan on a big, stable delta
+    # planner damping: only change the plan on a big, stable delta.
+    # windows are DISJOINT: recent = last `short` weeks, prior = the
+    # (`long` - `short`) weeks before that; both must agree independently.
     "window_weeks_long": 8,
     "window_weeks_short": 4,
     "min_samples_per_weekday": 3,
     "fresh_cutoff_days": 7,
+    # which performance sources the planner ranks by ([] = all in the store);
+    # per-post views are summed across these sources (cross-platform total)
+    "planner_sources": [],
     # performance sources
     "tiktok_handle": "",          # enables the yt-dlp puller when set
     "meta": {},                   # {"env": "~/.config/meta/.env", "ig_user_id": "...", "fb_page_id": "..."}
