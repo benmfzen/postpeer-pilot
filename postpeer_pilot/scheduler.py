@@ -30,17 +30,33 @@ def _title(video: Path, title: str | None) -> str | None:
     return sidecar.read_text().strip() if sidecar.exists() else None
 
 
+def _already_scheduled(video: Path) -> str | None:
+    """Idempotency guard: has THIS file already been scheduled into a future slot?
+    Retrying a batch after a partial failure must not double-post the successes."""
+    today = date.today().isoformat()
+    for e in plan.ledger_entries():
+        if e.get("video") == video.name and e.get("when", "")[:10] >= today:
+            return e["when"]
+    return None
+
+
 def schedule(videos: list, captions: list | None = None, titles: list | None = None,
              series: str | None = None, dry_run: bool = False,
-             start: date | None = None) -> list:
+             start: date | None = None, allow_duplicate: bool = False) -> list:
     """Schedule each video on the next free plan slot. Slots handed out earlier in the
-    same run are respected, as is the per-day series cap."""
+    same run are respected, as is the per-day series cap. Re-running a batch skips
+    videos that already sit in a future slot (see _already_scheduled)."""
     taken: dict = {}
     results = []
     for i, v in enumerate(videos):
         video = Path(v).expanduser()
         if not video.is_file():
             results.append({"ok": False, "video": str(v), "error": "file not found"})
+            continue
+        if not allow_duplicate and not dry_run and (dup := _already_scheduled(video)):
+            results.append({"ok": False, "video": video.name, "skipped": True,
+                            "error": f"already scheduled for {dup} — "
+                                     "pass allow_duplicate to post it again"})
             continue
         cap = _caption(video, captions[i] if captions else None)
         slot = plan.free_slots(1, start=start, series=series, taken_extra=taken)[0]

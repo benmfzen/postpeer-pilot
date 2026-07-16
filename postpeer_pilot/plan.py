@@ -43,14 +43,17 @@ def occupied() -> dict:
     return occ
 
 
-def _series_by_day() -> dict:
-    """{'YYYY-MM-DD': [series, ...]} from the local ledger (only posts this tool scheduled)."""
+def _series_by_day(exclude_slots: set | None = None) -> dict:
+    """{'YYYY-MM-DD': [series, ...]} from the local ledger (only posts this tool scheduled).
+    `exclude_slots` drops entries the caller already counts itself (taken_extra) — a slot
+    handed out AND ledger-recorded in the same run must not count twice toward the cap."""
     out = defaultdict(list)
+    exclude_slots = exclude_slots or set()
     if LEDGER.exists():
         for ln in LEDGER.read_text().splitlines():
             try:
                 r = json.loads(ln)
-                if r.get("series"):
+                if r.get("series") and r["when"] not in exclude_slots:
                     out[r["when"][:10]].append(r["series"])
             except (json.JSONDecodeError, KeyError):
                 pass
@@ -64,6 +67,18 @@ def record(when: str, video: str, series: str | None, post_id: str = "",
         f.write(json.dumps({"when": when, "video": video, "series": series,
                             "post_id": post_id, "caption": caption},
                            ensure_ascii=False) + "\n")
+
+
+def ledger_entries() -> list:
+    if not LEDGER.exists():
+        return []
+    out = []
+    for ln in LEDGER.read_text().splitlines():
+        try:
+            out.append(json.loads(ln))
+        except json.JSONDecodeError:
+            pass
+    return out
 
 
 def ledger_by_post_id() -> dict:
@@ -91,8 +106,8 @@ def free_slots(count: int = 1, start: date | None = None, series: str | None = N
     plan = active()
     occ = occupied()
     cap = plan["series_day_cap"]
-    series_days = _series_by_day() if series and cap else {}
     taken_extra = taken_extra or {}
+    series_days = _series_by_day(exclude_slots=set(taken_extra)) if series and cap else {}
     extra = defaultdict(int)
     for s, sr in taken_extra.items():
         if series and sr == series:

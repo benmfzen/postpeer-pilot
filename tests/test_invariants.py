@@ -98,6 +98,10 @@ def test_i6_series_cap_never_exceeded(home, fake_api, video):
         assert r["ok"]
         per_day[r["slot"][:10]] = per_day.get(r["slot"][:10], 0) + 1
     assert max(per_day.values()) <= 2              # series_day_cap from config
+    # ...and the cap is FILLED, not undershot: 5 videos at 2/day need exactly 3 days
+    # (guards against double-counting a slot in ledger + taken_extra)
+    assert len(per_day) == 3
+    assert sorted(per_day.values(), reverse=True) == [2, 2, 1]
 
 
 def test_i7_second_run_sees_first_runs_slots(home, fake_api, video):

@@ -12,12 +12,17 @@ Hand-rolled MCP (newline-delimited JSON-RPC over stdio) — zero dependencies.
 Register:  claude mcp add --scope user postpeer-pilot -- python3 /path/to/server.py
 """
 import json
+import os
 import sys
 from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from postpeer_pilot import api, perf, plan, planner, scheduler  # noqa: E402
+
+if os.environ.get("POSTPEER_PILOT_FAKE"):      # offline mode: demos, integration, evals
+    from postpeer_pilot import fake_api
+    fake_api.install(os.environ["POSTPEER_PILOT_FAKE"])
 
 TOOLS = [
     {"name": "queue_status",

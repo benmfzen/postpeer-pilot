@@ -1,5 +1,7 @@
 # postpeer-pilot
 
+[![ci](https://github.com/benmfzen/postpeer-pilot/actions/workflows/ci.yml/badge.svg)](https://github.com/benmfzen/postpeer-pilot/actions/workflows/ci.yml)
+
 **A reliable tool layer that gives an AI agent bounded, reversible control over a
 real multi-platform publishing workflow** — built as an MCP server on top of the
 [Postpeer](https://postpeer.dev) API (TikTok, Instagram, Facebook, YouTube).
@@ -21,6 +23,11 @@ flowchart LR
     F -->|views: tiktok / meta / manual| P
     P -->|damped: two disjoint windows must agree| PL
 ```
+
+**See it act — and refuse to act** (`python3 examples/demo.py`, no keys needed;
+the fake-API mode makes the whole stack runnable offline):
+
+![demo: dry run, series cap, refused plan change, applied plan change](docs/demo.gif)
 
 ## The four tools
 
@@ -82,6 +89,30 @@ I8  ambiguous performance matches are refused, not guessed
 ```bash
 python3 -m pytest tests/
 ```
+
+Beyond invariants, `tests/test_reliability.py` pins the retry policy (5xx/429/network
+retried with backoff, other 4xx fail fast) and idempotency: re-running a batch after
+a partial failure skips the already-scheduled videos instead of double-posting them.
+CI runs the full suite plus the backtest demo on Python 3.11–3.13.
+
+## Agent evals
+
+Deterministic tests prove the tool layer; [`evals/`](evals/) measures the layer
+above — **does an agent (Claude via MCP) drive it correctly, and do the guarantees
+hold even when the operator asks for something unsafe?** Six scenario cases
+("post RIGHT NOW live!", missing caption, "apply the plan, I don't care about thin
+data", …) run against the real server in fake-API mode; grading is state inspection,
+not LLM judgment.
+
+| Category | Pass rate (claude-sonnet-5, 3 trials/case) |
+|---|---:|
+| Unsafe-action refusal | 9/9 |
+| Task completion · argument correctness · tool selection | 3/3 each |
+| **Overall** | **18/18** |
+
+The traces show defense in depth working: in the missing-caption case the agent
+*tried* to schedule and the tool layer refused — the guarantee held below the
+agent's judgment. Details and caveats: [`evals/README.md`](evals/README.md).
 
 ## Backtesting the planner
 
@@ -145,8 +176,25 @@ next to the mp4s.
 - YouTube titles go in `platformSpecificData: {"title": ...}` and the object rejects
   any additional property.
 
+## Where this comes from
+
+Extracted from a real four-platform channel's daily pipeline: 85+ posts published
+through it, ~2 weeks of scheduled runway maintained continuously, a 25-part series
+shipped without flooding the plan, zero accidental live posts — and a first plan
+review that correctly **refused** to change anything on too-thin history. The full
+story, including what operation taught the design:
+[`docs/case-study.md`](docs/case-study.md).
+
 ## Design notes & known limits
 
+- **Offline/fake mode.** `POSTPEER_PILOT_FAKE=<state.json>` swaps the network layer
+  for an in-process fake with injectable failures — demos, integration tests and
+  agent evals all run on it. Try `python3 examples/demo.py`.
+- **Retries & error classes.** Network errors, 429 and 5xx retry with exponential
+  backoff; other 4xx raise immediately as permanent (`ApiError`). The S3 media PUT
+  retries safely (same bytes, same key).
+- **Idempotent re-runs.** The local ledger doubles as an idempotency record: a video
+  already sitting in a future slot is skipped on re-run (`allow_duplicate` opts out).
 - **Hand-rolled MCP, no SDK.** For a small local stdio server, the minimal
   newline-delimited JSON-RPC implementation keeps install weight at zero and shows
   the protocol plainly. For a long-lived, multi-team service I would use the

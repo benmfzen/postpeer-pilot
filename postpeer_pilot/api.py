@@ -18,23 +18,50 @@ The quirks that bite, captured once:
 """
 import json
 import subprocess
+import time
 from pathlib import Path
 
 from . import config
 
 BASE = "https://api.postpeer.dev/v1"
+RETRIES = 3
+BACKOFF_S = 0.8            # 0.8, 1.6, 3.2 — small tool, polite retries
+
+
+class ApiError(RuntimeError):
+    """Permanent API failure (4xx other than 429) — retrying would not help."""
+
+
+def _run(cmd: list, timeout: int) -> tuple:
+    """(curl_exit_code, stdout) — separated for tests to monkeypatch."""
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    return p.returncode, p.stdout if p.returncode == 0 or p.stdout else p.stderr
 
 
 def _req(method: str, path: str, body: dict | None = None) -> dict:
-    cmd = ["curl", "-sS", "--fail-with-body", "-X", method, f"{BASE}{path}",
-           "-H", f"x-access-key: {config.api_key()}", "-H", "Content-Type: application/json"]
+    """Request with retry/backoff. Retryable: network errors, 429, 5xx.
+    Permanent: other 4xx -> ApiError immediately (no pointless retries)."""
+    cmd = ["curl", "-sS", "-X", method, f"{BASE}{path}",
+           "-H", f"x-access-key: {config.api_key()}", "-H", "Content-Type: application/json",
+           "-w", "\n%{http_code}"]
     if body is not None:
         cmd += ["-d", json.dumps(body)]
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-    try:
-        return json.loads(p.stdout)
-    except json.JSONDecodeError:
-        raise RuntimeError(f"Postpeer {method} {path}: {p.stdout[:300] or p.stderr[:300]}")
+    last = ""
+    for attempt in range(RETRIES):
+        code, out = _run(cmd, timeout=120)
+        raw, _, status_s = out.rpartition("\n")
+        status = int(status_s) if status_s.strip().isdigit() else 0
+        if code == 0 and 200 <= status < 300:
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                raise RuntimeError(f"Postpeer {method} {path}: non-JSON body {raw[:200]!r}")
+        if code == 0 and 400 <= status < 500 and status != 429:
+            raise ApiError(f"Postpeer {method} {path} -> {status}: {raw[:300]}")
+        last = f"status={status or 'network'} {raw[:200]!r}"
+        if attempt < RETRIES - 1:
+            time.sleep(BACKOFF_S * (2 ** attempt))
+    raise RuntimeError(f"Postpeer {method} {path}: still failing after {RETRIES} attempts ({last})")
 
 
 def list_posts(status: str = "scheduled") -> list:
@@ -53,13 +80,22 @@ def list_posts(status: str = "scheduled") -> list:
 
 
 def upload_media(mp4: Path) -> str:
-    """Upload via Postpeer's presigned-S3 flow -> public URL. No external hosting needed."""
+    """Upload via Postpeer's presigned-S3 flow -> public URL. No external hosting needed.
+    The PUT retries on network hiccups (S3 PUTs are idempotent — same bytes, same key)."""
     d = _req("POST", "/media/upload", {"filename": mp4.name, "mimeType": "video/mp4"})
     d = d.get("data", d)
-    subprocess.run(["curl", "-sS", "--fail", "-X", "PUT", d["uploadUrl"],
-                    "--upload-file", str(mp4), "-H", "Content-Type: video/mp4"],
-                   check=True, capture_output=True, text=True, timeout=1800)
-    return d["publicUrl"]
+    for attempt in range(RETRIES):
+        try:
+            subprocess.run(["curl", "-sS", "--fail", "-X", "PUT", d["uploadUrl"],
+                            "--upload-file", str(mp4), "-H", "Content-Type: video/mp4"],
+                           check=True, capture_output=True, text=True, timeout=1800)
+            return d["publicUrl"]
+        except subprocess.CalledProcessError as e:
+            if attempt == RETRIES - 1:
+                raise RuntimeError(f"media upload failed after {RETRIES} attempts: "
+                                   f"{e.stderr[:200]}") from e
+            time.sleep(BACKOFF_S * (2 ** attempt))
+    raise AssertionError("unreachable")
 
 
 def scheduled_for(local_iso: str) -> str:
