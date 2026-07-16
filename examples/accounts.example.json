@@ -1,0 +1,6 @@
+[
+  {"platform": "tiktok",    "accountId": "..."},
+  {"platform": "instagram", "accountId": "..."},
+  {"platform": "facebook",  "accountId": "..."},
+  {"platform": "youtube",   "accountId": "..."}
+]
