@@ -12,6 +12,7 @@ override with env POSTPEER_PILOT_HOME):
   scheduled.jsonl   local ledger of what this tool scheduled (series caps)
 """
 import json
+from . import safe_read
 import os
 from pathlib import Path
 
@@ -51,8 +52,9 @@ DEFAULTS = {
 def load() -> dict:
     cfg = dict(DEFAULTS)
     f = HOME / "config.json"
-    if f.exists():
-        cfg.update(json.loads(f.read_text()))
+    raw = safe_read.read_text_if_present(f)
+    if raw is not None:
+        cfg.update(json.loads(raw))
     return cfg
 
 
@@ -60,8 +62,7 @@ def api_key() -> str:
     if os.environ.get("POSTPEER_API_KEY"):
         return os.environ["POSTPEER_API_KEY"]
     env = HOME / ".env"
-    if env.exists():
-        for line in env.read_text().splitlines():
+    for line in safe_read.read_lines_if_present(env):
             if line.startswith("POSTPEER_API_KEY="):
                 return line.split("=", 1)[1].strip()
     raise RuntimeError(f"POSTPEER_API_KEY not set (env var or {env})")

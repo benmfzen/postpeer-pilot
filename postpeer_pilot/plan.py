@@ -7,7 +7,7 @@ import json
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
-from . import api, config
+from . import api, config, safe_read
 
 PLAN_FILE = config.HOME / "plan.json"
 LEDGER = config.HOME / "scheduled.jsonl"
@@ -19,8 +19,9 @@ def active() -> dict:
     plan = {"per_day_by_wd": {int(k): int(v) for k, v in cfg["per_day_by_wd"].items()},
             "slot_hours": list(cfg["slot_hours"]),
             "series_day_cap": int(cfg["series_day_cap"]), "source": "config defaults"}
-    if PLAN_FILE.exists():
-        p = json.loads(PLAN_FILE.read_text())
+    raw = safe_read.read_text_if_present(PLAN_FILE)
+    if raw is not None:
+        p = json.loads(raw)
         plan.update({"per_day_by_wd": {int(k): int(v) for k, v in p["per_day_by_wd"].items()},
                      "slot_hours": list(p.get("slot_hours", plan["slot_hours"])),
                      "source": "plan.json"})
@@ -49,8 +50,7 @@ def _series_by_day(exclude_slots: set | None = None) -> dict:
     handed out AND ledger-recorded in the same run must not count twice toward the cap."""
     out = defaultdict(list)
     exclude_slots = exclude_slots or set()
-    if LEDGER.exists():
-        for ln in LEDGER.read_text().splitlines():
+    for ln in safe_read.read_lines_if_present(LEDGER):
             try:
                 r = json.loads(ln)
                 if r.get("series") and r["when"] not in exclude_slots:
@@ -70,10 +70,8 @@ def record(when: str, video: str, series: str | None, post_id: str = "",
 
 
 def ledger_entries() -> list:
-    if not LEDGER.exists():
-        return []
     out = []
-    for ln in LEDGER.read_text().splitlines():
+    for ln in safe_read.read_lines_if_present(LEDGER):
         try:
             out.append(json.loads(ln))
         except json.JSONDecodeError:
@@ -86,8 +84,7 @@ def ledger_by_post_id() -> dict:
     performance matching: a published post whose id is in here needs no fuzzy text
     match to know its canonical caption."""
     out = {}
-    if LEDGER.exists():
-        for ln in LEDGER.read_text().splitlines():
+    for ln in safe_read.read_lines_if_present(LEDGER):
             try:
                 r = json.loads(ln)
                 if r.get("post_id"):

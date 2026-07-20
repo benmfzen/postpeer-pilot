@@ -20,7 +20,7 @@ import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import config
+from . import config, safe_read
 
 STORE = config.HOME / "performance.jsonl"
 
@@ -42,10 +42,8 @@ def _append(rows: list):
 
 def latest() -> list:
     """Latest snapshot per (source, title): [{'title', 'views', 'source'}]."""
-    if not STORE.exists():
-        return []
     best = {}
-    for ln in STORE.read_text().splitlines():
+    for ln in safe_read.read_lines_if_present(STORE):
         try:
             r = json.loads(ln)
             best[(r.get("source"), r["title"])] = r    # append-only: later line wins
@@ -128,8 +126,7 @@ def pull_meta(limit: int = 50) -> int:
         return 0
     token = None
     env = Path(m.get("env", "")).expanduser()
-    if env.exists():
-        for ln in env.read_text().splitlines():
+    for ln in safe_read.read_lines_if_present(env):
             if ln.startswith("META_PAGE_TOKEN="):
                 token = ln.split("=", 1)[1].strip()
     if not token:
