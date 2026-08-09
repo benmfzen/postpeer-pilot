@@ -218,6 +218,12 @@ story, including what operation taught the design:
 - **`plan.json` writes are not atomic** (single-operator assumption; a torn read
   falls back to config defaults rather than crashing).
 
+What all of the single-operator assumptions above would concretely take to remove —
+locking, plan versioning, a durable queue, tenant isolation, a real audit log, and
+where human approval for plan changes should live at scale — is recorded as an
+explicit, unimplemented architecture decision in
+[ADR-002](docs/adr/002-scale-out-design.md), not left implicit.
+
 ## Non-goals
 
 No content generation, no analytics dashboard, no live posting. This is the thin,
